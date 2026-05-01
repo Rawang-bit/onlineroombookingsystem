@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: smartbook-postgres
+    environment:
+      POSTGRES_DB: smartbook
+      POSTGRES_USER: smartbook
+      POSTGRES_PASSWORD: smartbook
+    ports:
+      - "5432:5432"
+    volumes:
+      - smartbook_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smartbook -d smartbook"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  smartbook_pgdata:

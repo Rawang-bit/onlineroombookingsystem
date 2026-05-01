@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Rooms - Smart Meeting Room Booking</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="layout"><aside class="sidebar"><div class="brand">Smart Meeting Room Booking</div><nav class="nav"><a href="dashboard.html">Dashboard</a><a class="active" href="rooms.html">Rooms</a><a href="users.html">Users</a><a href="bookings.html">Bookings</a><a href="book-room.html">Book Room</a><a href="#" onclick="logout()">Logout</a></nav></aside>
+<main class="main"><div class="topbar"><div><div class="page-title">Room Management</div><div class="subtitle">Add, edit, and manage meeting rooms from PostgreSQL</div></div></div><div id="roomMessage" class="notice" style="display:none;"></div>
+<section class="grid grid-2"><div class="card"><div class="page-title" id="formTitle" style="font-size:20px;margin-bottom:14px;">Add New Room</div><form id="roomForm"><input type="hidden" id="roomId"><label>Room Name<input type="text" id="roomName" required></label><div class="row"><label>Capacity<input type="number" id="capacity" min="1" required></label><label>Location<input type="text" id="location" required></label></div><label>Status<select id="roomStatus"><option>Active</option><option>Inactive</option></select></label><div class="header-actions"><button type="submit">Save Room</button><button type="button" class="btn-secondary" onclick="resetRoomForm()">Clear</button></div></form></div><div class="grid" id="roomCards"></div></section></main></div>
+<script src="app.js"></script><script>
+requireAuth(); let roomCache=[];
+function resetRoomForm(){ document.getElementById('roomId').value=''; document.getElementById('roomForm').reset(); document.getElementById('formTitle').textContent='Add New Room'; }
+async function renderRooms(){ roomCache=await getRooms(); document.getElementById('roomCards').innerHTML = roomCache.map(room => `<div class="card room-card"><h3>${escapeHtml(room.name)}</h3><div class="room-meta">Capacity: ${room.capacity} | Location: ${escapeHtml(room.location)}</div><div style="margin-bottom:12px;">${formatStatus(room.status)}</div><button onclick="editRoom(${room.id})">Edit</button> <button class="btn-danger" onclick="removeRoom(${room.id})">Delete</button></div>`).join('') || '<div class="card">No rooms found.</div>'; }
+function editRoom(id){ const r=roomCache.find(x=>Number(x.id)===Number(id)); if(!r)return; document.getElementById('roomId').value=r.id; document.getElementById('roomName').value=r.name; document.getElementById('capacity').value=r.capacity; document.getElementById('location').value=r.location; document.getElementById('roomStatus').value=r.status; document.getElementById('formTitle').textContent='Edit Room'; window.scrollTo({top:0,behavior:'smooth'}); }
+async function removeRoom(id){ if(!confirm('Delete this room?'))return; try{ await deleteRoomApi(id); showMessage('roomMessage','Room deleted successfully.'); await renderRooms(); }catch(err){ showMessage('roomMessage',err.message,'error'); } }
+document.getElementById('roomForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const payload = {
+    name: document.getElementById('roomName').value.trim(),
+    capacity: Number(document.getElementById('capacity').value),
+    location: document.getElementById('location').value.trim(),
+    status: document.getElementById('roomStatus').value
+  };
+  try {
+    const id = document.getElementById('roomId').value;
+    if (id) await updateRoom(id, payload); else await createRoom(payload);
+    resetRoomForm();
+    showMessage('roomMessage', 'Room saved successfully.');
+    await renderRooms();
+  } catch (err) {
+    showMessage('roomMessage', err.message, 'error');
+  }
+});
+renderRooms().catch(err=>showMessage('roomMessage',err.message,'error'));
+</script></body></html>

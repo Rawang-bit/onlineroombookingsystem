@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard - Smart Meeting Room Booking</title><link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="layout"><aside class="sidebar"><div class="brand">Smart Meeting Room Booking</div><nav class="nav"><a class="active" href="dashboard.html">Dashboard</a><a href="rooms.html">Rooms</a><a href="users.html">Users</a><a href="bookings.html">Bookings</a><a href="book-room.html">Book Room</a><a href="#" onclick="logout()">Logout</a></nav></aside>
+    <main class="main"><div class="topbar"><div><div class="page-title">Dashboard</div><div class="subtitle">Overview of rooms and reservations</div></div></div>
+      <section class="grid grid-3"><div class="card"><div class="stat-label">Total Rooms</div><div class="stat-number" id="totalRooms">0</div></div><div class="card"><div class="stat-label">Total Bookings</div><div class="stat-number" id="totalBookings">0</div></div><div class="card"><div class="stat-label">Today's Bookings</div><div class="stat-number" id="todayBookings">0</div></div></section>
+      <section class="card" style="margin-top:20px;"><div class="page-title" style="font-size:20px;margin-bottom:14px;">Recent Bookings</div><div class="table-wrap"><table><thead><tr><th>User</th><th>Room</th><th>Date</th><th>Time</th><th>Status</th></tr></thead><tbody id="recentBookings"></tbody></table></div></section>
+    </main></div>
+  <script src="app.js"></script><script>
+    requireAuth();
+    async function loadDashboard(){
+      try{
+        const [rooms, bookings] = await Promise.all([getRooms(), getBookings()]);
+        document.getElementById('totalRooms').textContent = rooms.length;
+        document.getElementById('totalBookings').textContent = bookings.length;
+        document.getElementById('todayBookings').textContent = bookings.filter(b => b.date === todayISO() && b.status !== 'Cancelled').length;
+        document.getElementById('recentBookings').innerHTML = bookings.slice(0,5).map(b => `<tr><td>${escapeHtml(b.user)}</td><td>${escapeHtml(b.roomName)}</td><td>${escapeHtml(b.date)}</td><td>${escapeHtml(b.start)} - ${escapeHtml(b.end)}</td><td>${formatStatus(b.status)}</td></tr>`).join('') || '<tr><td colspan="5">No bookings found.</td></tr>';
+      }catch(err){ alert(err.message); }
+    }
+    loadDashboard();
+  </script>
+</body></html>

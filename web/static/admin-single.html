@@ -1,0 +1,1230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SmartBook Admin Panel</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+
+    .glass {
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid #e2e8f0;
+    }
+
+    .custom-scroll::-webkit-scrollbar {
+      height: 6px;
+      width: 6px;
+    }
+
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 10px;
+    }
+
+    .active-nav {
+      background: #4f46e5 !important;
+      color: white !important;
+      box-shadow: 0 8px 24px rgba(79, 70, 229, 0.18);
+    }
+
+    @keyframes modalPop {
+      from {
+        opacity: 0;
+        transform: scale(0.96);
+      }
+      to {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+
+    .animate-pop {
+      animation: modalPop 0.18s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-900 antialiased min-h-screen">
+  <div id="app"></div>
+
+  <script>
+    /* =========================================================
+       SmartBook Admin Panel
+       ---------------------------------------------------------
+       Frontend-only admin demo panel for room booking system.
+       Features:
+       - Admin login
+       - Dashboard summary
+       - Add / edit / delete rooms
+       - Add / edit / delete meetings
+       - Booking conflict checking
+       - localStorage persistence
+       ========================================================= */
+
+    /* -----------------------------
+       Storage keys
+    ----------------------------- */
+    const STORAGE_KEYS = {
+      rooms: 'smartbook_rooms_v2',
+      bookings: 'smartbook_bookings_v3',
+      adminSession: 'smartbook_admin_session_v2'
+    };
+
+    /* -----------------------------
+       Demo admin accounts
+       Replace with backend auth in production.
+    ----------------------------- */
+    const ADMIN_USERS = [
+      { username: 'admin', password: 'admin123', name: 'System Admin' },
+      { username: 'manager', password: 'manager123', name: 'Booking Manager' }
+    ];
+
+    /* -----------------------------
+       Available booking times
+    ----------------------------- */
+    const HOURS = [
+      '09:00 AM', '09:30 AM', '10:00 AM', '10:30 AM', '11:00 AM', '11:30 AM',
+      '12:00 PM', '12:30 PM', '01:00 PM', '01:30 PM', '02:00 PM', '02:30 PM',
+      '03:00 PM', '03:30 PM', '04:00 PM', '04:30 PM', '05:00 PM', '05:30 PM',
+      '06:00 PM', '06:30 PM', '07:00 PM'
+    ];
+
+    /* -----------------------------
+       Utility helpers
+    ----------------------------- */
+    function generateId() {
+      return Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+    }
+
+    function getTodayISO() {
+      const now = new Date();
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function formatDisplayDate(dateStr) {
+      if (!dateStr) return '-';
+      const d = new Date(dateStr + 'T00:00:00');
+      return d.toDateString();
+    }
+
+    function updateClockText() {
+      const clock = document.getElementById('clock');
+      const dateLabel = document.getElementById('dateLabel');
+      if (!clock || !dateLabel) return;
+
+      const now = new Date();
+      clock.innerText = now.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      dateLabel.innerText = now.toDateString().toUpperCase();
+    }
+
+    function getMinutesFromTime(timeStr) {
+      const [time, modifier] = timeStr.split(' ');
+      let [hour, minute] = time.split(':').map(Number);
+
+      if (hour === 12) hour = 0;
+      if (modifier === 'PM') hour += 12;
+
+      return hour * 60 + minute;
+    }
+
+    function getDuration(startTime, endTime) {
+      if (!startTime || !endTime) return '';
+      const minutes = getMinutesFromTime(endTime) - getMinutesFromTime(startTime);
+      const hrs = Math.floor(minutes / 60);
+      const mins = minutes % 60;
+
+      if (hrs > 0 && mins > 0) return `${hrs}h ${mins}m`;
+      if (hrs > 0) return `${hrs}h`;
+      return `${mins}m`;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+    }
+
+    /* -----------------------------
+       Default room seed
+    ----------------------------- */
+    function makeDefaultRooms() {
+      return [
+        { id: generateId(), name: 'Executive Boardroom', location: 'Level 4, North Wing', capacity: 18, status: 'Active' },
+        { id: generateId(), name: 'Innovation Hub', location: 'Level 3, East Wing', capacity: 12, status: 'Active' },
+        { id: generateId(), name: 'Collaboration Room A', location: 'Level 2, South Wing', capacity: 8, status: 'Active' },
+        { id: generateId(), name: 'Strategy Room', location: 'Level 5, West Wing', capacity: 10, status: 'Active' },
+        { id: generateId(), name: 'Conference Suite', location: 'Level 1, Main Block', capacity: 20, status: 'Active' }
+      ];
+    }
+
+    /* -----------------------------
+       Central app state
+    ----------------------------- */
+    let state = {
+      view: 'dashboard',
+      rooms: [],
+      bookings: [],
+      session: null,
+      filters: {
+        search: '',
+        roomId: '',
+        date: ''
+      },
+      roomForm: {
+        id: '',
+        name: '',
+        location: '',
+        capacity: '',
+        status: 'Active'
+      },
+      bookingForm: {
+        id: '',
+        roomId: '',
+        date: '',
+        startTime: '',
+        endTime: '',
+        purpose: '',
+        user: '',
+        email: ''
+      },
+      modal: {
+        open: false,
+        type: 'message',
+        title: '',
+        message: '',
+        confirmText: 'Confirm',
+        onConfirmAction: ''
+      }
+    };
+
+    /* -----------------------------
+       Storage functions
+    ----------------------------- */
+    function loadState() {
+      const savedRooms = localStorage.getItem(STORAGE_KEYS.rooms);
+      const savedBookings = localStorage.getItem(STORAGE_KEYS.bookings);
+      const savedSession = localStorage.getItem(STORAGE_KEYS.adminSession);
+
+      if (savedRooms) {
+        try {
+          state.rooms = JSON.parse(savedRooms);
+        } catch {
+          state.rooms = makeDefaultRooms();
+        }
+      } else {
+        state.rooms = makeDefaultRooms();
+      }
+
+      if (savedBookings) {
+        try {
+          state.bookings = JSON.parse(savedBookings);
+        } catch {
+          state.bookings = [];
+        }
+      } else {
+        state.bookings = [];
+      }
+
+      if (savedSession) {
+        try {
+          state.session = JSON.parse(savedSession);
+        } catch {
+          state.session = null;
+        }
+      } else {
+        state.session = null;
+      }
+
+      saveRooms();
+      saveBookings();
+    }
+
+    function saveRooms() {
+      localStorage.setItem(STORAGE_KEYS.rooms, JSON.stringify(state.rooms));
+    }
+
+    function saveBookings() {
+      localStorage.setItem(STORAGE_KEYS.bookings, JSON.stringify(state.bookings));
+    }
+
+    function saveSession() {
+      if (state.session) {
+        localStorage.setItem(STORAGE_KEYS.adminSession, JSON.stringify(state.session));
+      } else {
+        localStorage.removeItem(STORAGE_KEYS.adminSession);
+      }
+    }
+
+    /* -----------------------------
+       Lookup helpers
+    ----------------------------- */
+    function getRoomById(roomId) {
+      return state.rooms.find(room => room.id === roomId);
+    }
+
+    function getRoomName(roomId) {
+      const room = getRoomById(roomId);
+      return room ? room.name : 'Unknown Room';
+    }
+
+    function getRoomLocation(roomId) {
+      const room = getRoomById(roomId);
+      return room ? room.location : '-';
+    }
+
+    function isBookingToday(booking) {
+      return booking.date === getTodayISO();
+    }
+
+    function isBookingActiveNow(booking) {
+      if (!isBookingToday(booking)) return false;
+
+      const now = new Date();
+      const currentMinutes = now.getHours() * 60 + now.getMinutes();
+      const start = getMinutesFromTime(booking.startTime);
+      const end = getMinutesFromTime(booking.endTime);
+
+      return currentMinutes >= start && currentMinutes < end;
+    }
+
+    function isConflict(roomId, date, startTime, endTime, excludeId = '') {
+      const start = getMinutesFromTime(startTime);
+      const end = getMinutesFromTime(endTime);
+
+      return state.bookings.some(booking => {
+        if (booking.roomId !== roomId) return false;
+        if (booking.date !== date) return false;
+        if (excludeId && booking.id === excludeId) return false;
+
+        const bookingStart = getMinutesFromTime(booking.startTime);
+        const bookingEnd = getMinutesFromTime(booking.endTime);
+
+        return start < bookingEnd && end > bookingStart;
+      });
+    }
+
+    function getAvailableEndTimes(roomId, date, startTime, excludeId = '') {
+      if (!roomId || !date || !startTime) return [];
+
+      const startIndex = HOURS.indexOf(startTime);
+      if (startIndex === -1) return [];
+
+      const endTimes = [];
+
+      for (let i = startIndex + 1; i < HOURS.length; i++) {
+        const candidate = HOURS[i];
+        if (isConflict(roomId, date, startTime, candidate, excludeId)) break;
+        endTimes.push(candidate);
+      }
+
+      return endTimes;
+    }
+
+    function getAvailableRoomsNow() {
+      const occupiedRoomIds = new Set(
+        state.bookings.filter(isBookingActiveNow).map(booking => booking.roomId)
+      );
+
+      return state.rooms.filter(room => room.status === 'Active').length - occupiedRoomIds.size;
+    }
+
+    function getFilteredBookings() {
+      const search = state.filters.search.trim().toLowerCase();
+
+      return state.bookings
+        .filter(booking => {
+          const roomName = getRoomName(booking.roomId).toLowerCase();
+          const matchesSearch = !search ||
+            booking.purpose.toLowerCase().includes(search) ||
+            booking.user.toLowerCase().includes(search) ||
+            booking.email.toLowerCase().includes(search) ||
+            roomName.includes(search);
+
+          const matchesRoom = !state.filters.roomId || booking.roomId === state.filters.roomId;
+          const matchesDate = !state.filters.date || booking.date === state.filters.date;
+
+          return matchesSearch && matchesRoom && matchesDate;
+        })
+        .sort((a, b) => {
+          if (a.date !== b.date) return a.date.localeCompare(b.date);
+          return getMinutesFromTime(a.startTime) - getMinutesFromTime(b.startTime);
+        });
+    }
+
+    /* -----------------------------
+       Modal handling
+    ----------------------------- */
+    function openMessageModal(title, message) {
+      state.modal = {
+        open: true,
+        type: 'message',
+        title,
+        message,
+        confirmText: 'OK',
+        onConfirmAction: ''
+      };
+      render();
+    }
+
+    function openConfirmModal(title, message, confirmText, onConfirmAction) {
+      state.modal = {
+        open: true,
+        type: 'confirm',
+        title,
+        message,
+        confirmText,
+        onConfirmAction
+      };
+      render();
+    }
+
+    function closeModal() {
+      state.modal = {
+        open: false,
+        type: 'message',
+        title: '',
+        message: '',
+        confirmText: 'Confirm',
+        onConfirmAction: ''
+      };
+      render();
+    }
+
+    /* -----------------------------
+       Login actions
+    ----------------------------- */
+    function handleLogin(event) {
+      event.preventDefault();
+
+      const username = document.getElementById('loginUsername').value.trim();
+      const password = document.getElementById('loginPassword').value.trim();
+
+      const admin = ADMIN_USERS.find(user => user.username === username && user.password === password);
+
+      if (!admin) {
+        openMessageModal('Login Failed', 'Invalid admin username or password.');
+        return;
+      }
+
+      state.session = {
+        username: admin.username,
+        name: admin.name
+      };
+
+      saveSession();
+      render();
+    }
+
+    function logout() {
+      state.session = null;
+      saveSession();
+      render();
+    }
+
+    /* -----------------------------
+       Navigation
+    ----------------------------- */
+    function setView(view) {
+      state.view = view;
+      render();
+    }
+
+    /* -----------------------------
+       Room form actions
+    ----------------------------- */
+    function resetRoomForm() {
+      state.roomForm = {
+        id: '',
+        name: '',
+        location: '',
+        capacity: '',
+        status: 'Active'
+      };
+    }
+
+    function updateRoomFormField(field, value) {
+      state.roomForm[field] = value;
+    }
+
+    function startAddRoom() {
+      resetRoomForm();
+      state.view = 'rooms';
+      render();
+      scrollToSection('roomFormCard');
+    }
+
+    function startEditRoom(roomId) {
+      const room = getRoomById(roomId);
+      if (!room) return;
+
+      state.roomForm = {
+        id: room.id,
+        name: room.name,
+        location: room.location,
+        capacity: room.capacity,
+        status: room.status
+      };
+
+      state.view = 'rooms';
+      render();
+      scrollToSection('roomFormCard');
+    }
+
+    function saveRoom(event) {
+      event.preventDefault();
+
+      const id = state.roomForm.id;
+      const name = state.roomForm.name.trim();
+      const location = state.roomForm.location.trim();
+      const capacity = Number(state.roomForm.capacity);
+      const status = state.roomForm.status;
+
+      if (!name || !location || !capacity) {
+        openMessageModal('Incomplete Room Details', 'Please fill in room name, location, and capacity.');
+        return;
+      }
+
+      const duplicate = state.rooms.find(room => room.name.toLowerCase() === name.toLowerCase() && room.id !== id);
+      if (duplicate) {
+        openMessageModal('Duplicate Room Name', 'A room with this name already exists.');
+        return;
+      }
+
+      if (id) {
+        state.rooms = state.rooms.map(room =>
+          room.id === id
+            ? { ...room, name, location, capacity, status }
+            : room
+        );
+      } else {
+        state.rooms.push({
+          id: generateId(),
+          name,
+          location,
+          capacity,
+          status
+        });
+      }
+
+      saveRooms();
+      resetRoomForm();
+      render();
+      openMessageModal('Room Saved', 'Room details have been saved successfully.');
+    }
+
+    function deleteRoom(roomId) {
+      const room = getRoomById(roomId);
+      if (!room) return;
+
+      const hasBookings = state.bookings.some(booking => booking.roomId === roomId);
+      if (hasBookings) {
+        openMessageModal('Cannot Delete Room', 'This room already has meeting bookings. Delete or update those meetings first.');
+        return;
+      }
+
+      openConfirmModal(
+        'Delete Room',
+        `Are you sure you want to delete ${room.name}?`,
+        'Delete Room',
+        `confirmDeleteRoom('${roomId}')`
+      );
+    }
+
+    function confirmDeleteRoom(roomId) {
+      state.rooms = state.rooms.filter(room => room.id !== roomId);
+      saveRooms();
+      closeModal();
+      render();
+    }
+
+    /* -----------------------------
+       Booking form actions
+       Important fix:
+       - Typing no longer triggers full render.
+       - Only dependent field changes re-render.
+    ----------------------------- */
+    function resetBookingForm() {
+      state.bookingForm = {
+        id: '',
+        roomId: state.rooms[0]?.id || '',
+        date: getTodayISO(),
+        startTime: '',
+        endTime: '',
+        purpose: '',
+        user: '',
+        email: ''
+      };
+    }
+
+    function startAddBooking() {
+      resetBookingForm();
+      state.view = 'bookings';
+      render();
+      scrollToSection('bookingFormCard');
+    }
+
+    function startEditBooking(bookingId) {
+      const booking = state.bookings.find(item => item.id === bookingId);
+      if (!booking) return;
+
+      state.bookingForm = {
+        id: booking.id,
+        roomId: booking.roomId,
+        date: booking.date,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        purpose: booking.purpose,
+        user: booking.user,
+        email: booking.email
+      };
+
+      state.view = 'bookings';
+      render();
+      scrollToSection('bookingFormCard');
+    }
+
+    function updateBookingTextField(field, value) {
+      // Text fields update state only.
+      // No render here so typing stays smooth.
+      state.bookingForm[field] = value;
+    }
+
+    function updateBookingDependentField(field, value) {
+      // Fields that affect other UI pieces need re-render.
+      state.bookingForm[field] = value;
+
+      if (field === 'roomId' || field === 'date') {
+        const endTimes = getAvailableEndTimes(
+          state.bookingForm.roomId,
+          state.bookingForm.date,
+          state.bookingForm.startTime,
+          state.bookingForm.id
+        );
+
+        if (!endTimes.includes(state.bookingForm.endTime)) {
+          state.bookingForm.endTime = endTimes[0] || '';
+        }
+      }
+
+      if (field === 'startTime') {
+        const endTimes = getAvailableEndTimes(
+          state.bookingForm.roomId,
+          state.bookingForm.date,
+          state.bookingForm.startTime,
+          state.bookingForm.id
+        );
+        state.bookingForm.endTime = endTimes[0] || '';
+      }
+
+      render();
+    }
+
+    function saveBooking(event) {
+      event.preventDefault();
+
+      const form = state.bookingForm;
+      const purpose = form.purpose.trim();
+      const user = form.user.trim();
+      const email = form.email.trim().toLowerCase();
+
+      if (!form.roomId || !form.date || !form.startTime || !form.endTime || !purpose || !user || !email) {
+        openMessageModal('Incomplete Meeting', 'Please complete all meeting fields.');
+        return;
+      }
+
+      if (!/.+@.+\..+/.test(email)) {
+        openMessageModal('Invalid Email', 'Please enter a valid organizer email address.');
+        return;
+      }
+
+      if (getMinutesFromTime(form.endTime) <= getMinutesFromTime(form.startTime)) {
+        openMessageModal('Invalid Time Range', 'End time must be after start time.');
+        return;
+      }
+
+      if (isConflict(form.roomId, form.date, form.startTime, form.endTime, form.id)) {
+        openMessageModal('Booking Conflict', 'This meeting overlaps with another meeting in the same room.');
+        return;
+      }
+
+      if (form.id) {
+        state.bookings = state.bookings.map(booking =>
+          booking.id === form.id
+            ? {
+                ...booking,
+                roomId: form.roomId,
+                date: form.date,
+                startTime: form.startTime,
+                endTime: form.endTime,
+                purpose,
+                user,
+                email
+              }
+            : booking
+        );
+      } else {
+        state.bookings.push({
+          id: generateId(),
+          roomId: form.roomId,
+          date: form.date,
+          startTime: form.startTime,
+          endTime: form.endTime,
+          purpose,
+          user,
+          email
+        });
+      }
+
+      saveBookings();
+      resetBookingForm();
+      render();
+      openMessageModal('Meeting Saved', 'Meeting booking has been saved successfully.');
+    }
+
+    function deleteBooking(bookingId) {
+      const booking = state.bookings.find(item => item.id === bookingId);
+      if (!booking) return;
+
+      openConfirmModal(
+        'Delete Meeting',
+        `Are you sure you want to delete "${booking.purpose}"?`,
+        'Delete Meeting',
+        `confirmDeleteBooking('${bookingId}')`
+      );
+    }
+
+    function confirmDeleteBooking(bookingId) {
+      state.bookings = state.bookings.filter(booking => booking.id !== bookingId);
+      saveBookings();
+      closeModal();
+      render();
+    }
+
+    /* -----------------------------
+       Filters
+    ----------------------------- */
+    function updateFilter(field, value) {
+      state.filters[field] = value;
+      render();
+    }
+
+    /* -----------------------------
+       Small UI helper
+    ----------------------------- */
+    function scrollToSection(id) {
+      setTimeout(() => {
+        const target = document.getElementById(id);
+        if (target) {
+          target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }, 0);
+    }
+
+    /* -----------------------------
+       UI Renderers
+    ----------------------------- */
+    function renderLoginPage() {
+      return `
+        <div class="min-h-screen flex items-center justify-center p-6">
+          <div class="w-full max-w-md bg-white rounded-[2.5rem] shadow-2xl border border-slate-200 p-8 animate-pop">
+            <div class="text-center mb-8">
+              <div class="w-16 h-16 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto mb-4 shadow-lg">
+                <i data-lucide="shield-check"></i>
+              </div>
+              <h1 class="text-3xl font-black text-slate-900 tracking-tight">SmartBook Admin</h1>
+              <p class="text-slate-500 font-bold text-sm mt-2">Modern and simple admin dashboard for room booking</p>
+            </div>
+
+            <form onsubmit="handleLogin(event)" class="space-y-5">
+              <div>
+                <label class="text-[10px] font-black text-slate-400 block mb-2 uppercase tracking-widest">Username</label>
+                <input id="loginUsername" type="text" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="admin" />
+              </div>
+              <div>
+                <label class="text-[10px] font-black text-slate-400 block mb-2 uppercase tracking-widest">Password</label>
+                <input id="loginPassword" type="password" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="••••••••" />
+              </div>
+              <button class="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-indigo-700 transition-all shadow-xl">Login</button>
+            </form>
+
+            <div class="mt-6 bg-slate-50 border border-slate-100 rounded-2xl p-4">
+              <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Demo Credentials</p>
+              <p class="text-sm font-bold text-slate-700">admin / admin123</p>
+              <p class="text-sm font-bold text-slate-700">manager / manager123</p>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNavButton(view, label) {
+      return `
+        <button onclick="setView('${view}')" class="px-4 py-3 rounded-xl text-sm font-bold transition-all ${state.view === view ? 'active-nav' : 'text-slate-500 hover:bg-slate-50'}">
+          ${label}
+        </button>
+      `;
+    }
+
+    function renderStatCard(title, value, subtitle) {
+      return `
+        <div class="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+          <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-4">${title}</p>
+          <h2 class="text-4xl font-black text-slate-900">${value}</h2>
+          <p class="text-sm font-bold text-slate-500 mt-2">${subtitle}</p>
+        </div>
+      `;
+    }
+
+    function renderShell(content) {
+      return `
+        <header class="sticky top-0 z-50 glass px-6 py-4">
+          <div class="grid grid-cols-2 md:grid-cols-3 items-center gap-4">
+            <div class="flex items-center gap-2.5">
+              <div class="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg">
+                <i data-lucide="shield-check"></i>
+              </div>
+              <div>
+                <span class="text-xl font-extrabold tracking-tighter text-slate-800 uppercase">Smart<span class="text-indigo-600">Book</span> Admin</span>
+                <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest">${state.session?.name || ''}</p>
+              </div>
+            </div>
+
+            <div class="hidden md:flex justify-center">
+              <div class="inline-flex bg-white border border-slate-200 p-1 rounded-2xl shadow-sm gap-1">
+                ${renderNavButton('dashboard', 'Dashboard')}
+                ${renderNavButton('rooms', 'Rooms')}
+                ${renderNavButton('bookings', 'Meetings')}
+              </div>
+            </div>
+
+            <div class="text-right flex items-center justify-end gap-3">
+              <div>
+                <p class="text-lg font-black tabular-nums text-slate-800 leading-none" id="clock">00:00</p>
+                <p class="text-[9px] font-bold text-indigo-500 uppercase tracking-widest mt-1" id="dateLabel">LOADING...</p>
+              </div>
+              <button onclick="logout()" class="bg-slate-900 text-white px-4 py-3 rounded-2xl font-bold text-sm hover:bg-slate-800">Logout</button>
+            </div>
+          </div>
+        </header>
+
+        <main class="p-6 md:p-10 max-w-7xl mx-auto space-y-8">
+          ${content}
+        </main>
+
+        ${renderModal()}
+      `;
+    }
+
+    function renderDashboardPage() {
+      const todayBookings = state.bookings.filter(isBookingToday);
+      const activeCount = state.bookings.filter(isBookingActiveNow).length;
+
+      return `
+        <section class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <h1 class="text-4xl font-black tracking-tight text-slate-900">Dashboard</h1>
+            <p class="text-slate-500 font-bold text-sm mt-2">Overview of rooms, meetings, and current availability.</p>
+          </div>
+          <div class="flex gap-3">
+            <button onclick="startAddRoom()" class="bg-white border border-slate-200 text-slate-700 px-4 py-3 rounded-2xl shadow-sm font-bold text-sm hover:bg-slate-50">Add Room</button>
+            <button onclick="startAddBooking()" class="bg-indigo-600 text-white px-4 py-3 rounded-2xl shadow-sm font-bold text-sm hover:bg-indigo-700">Add Meeting</button>
+          </div>
+        </section>
+
+        <section class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
+          ${renderStatCard('Total Rooms', state.rooms.length, 'Registered meeting rooms')}
+          ${renderStatCard('Total Meetings', state.bookings.length, 'All saved meetings')}
+          ${renderStatCard('Today Meetings', todayBookings.length, 'Meetings scheduled today')}
+          ${renderStatCard('Available Now', getAvailableRoomsNow(), `${activeCount} room(s) in use now`)}
+        </section>
+
+        <section>
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h3 class="text-2xl font-black text-slate-900">Room Status</h3>
+              <p class="text-slate-500 font-bold text-sm">Live room availability overview</p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            ${state.rooms.map(room => {
+              const activeBooking = state.bookings.find(booking => booking.roomId === room.id && isBookingActiveNow(booking));
+              const isOccupied = !!activeBooking;
+
+              return `
+                <div class="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <h4 class="text-lg font-black text-slate-900">${room.name}</h4>
+                      <p class="text-xs font-bold uppercase tracking-widest text-slate-400 mt-1">${room.location}</p>
+                    </div>
+                    <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${isOccupied ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}">
+                      ${isOccupied ? 'Occupied' : 'Available'}
+                    </span>
+                  </div>
+
+                  <div class="mt-4 grid grid-cols-2 gap-3">
+                    <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                      <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Capacity</p>
+                      <p class="font-bold text-slate-800">${room.capacity} seats</p>
+                    </div>
+                    <div class="bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                      <p class="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2">Status</p>
+                      <p class="font-bold text-slate-800">${room.status}</p>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 bg-slate-50 rounded-2xl p-4 border border-slate-100">
+                    ${isOccupied ? `
+                      <p class="text-sm font-bold text-slate-700">${activeBooking.purpose}</p>
+                      <p class="text-xs font-bold text-slate-400 mt-1">${activeBooking.startTime} - ${activeBooking.endTime}</p>
+                      <p class="text-xs font-bold text-indigo-500 mt-2">${activeBooking.user}</p>
+                    ` : `
+                      <p class="text-sm font-bold text-slate-500">No active meeting right now</p>
+                    `}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderRoomsPage() {
+      return `
+        <section class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <h1 class="text-4xl font-black tracking-tight text-slate-900">Rooms</h1>
+            <p class="text-slate-500 font-bold text-sm mt-2">Add, update, and delete meeting rooms.</p>
+          </div>
+          <button onclick="startAddRoom()" class="bg-indigo-600 text-white px-4 py-3 rounded-2xl shadow-sm font-bold text-sm hover:bg-indigo-700">Add Room</button>
+        </section>
+
+        <section id="roomFormCard" class="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+          <div class="mb-6">
+            <h3 class="text-2xl font-black text-slate-900">${state.roomForm.id ? 'Edit Room' : 'Add Room'}</h3>
+            <p class="text-slate-500 font-bold text-sm mt-1">Keep room settings simple and clean.</p>
+          </div>
+
+          <form onsubmit="saveRoom(event)" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Room Name</label>
+              <input value="${escapeHtml(state.roomForm.name)}" oninput="updateRoomFormField('name', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Location</label>
+              <input value="${escapeHtml(state.roomForm.location)}" oninput="updateRoomFormField('location', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Capacity</label>
+              <input type="number" min="1" value="${escapeHtml(String(state.roomForm.capacity))}" oninput="updateRoomFormField('capacity', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Status</label>
+              <select onchange="updateRoomFormField('status', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="Active" ${state.roomForm.status === 'Active' ? 'selected' : ''}>Active</option>
+                <option value="Inactive" ${state.roomForm.status === 'Inactive' ? 'selected' : ''}>Inactive</option>
+              </select>
+            </div>
+
+            <div class="md:col-span-2 flex gap-3">
+              <button class="bg-indigo-600 text-white px-5 py-4 rounded-2xl font-black hover:bg-indigo-700">Save Room</button>
+              <button type="button" onclick="resetRoomForm(); render();" class="bg-slate-100 text-slate-700 px-5 py-4 rounded-2xl font-black hover:bg-slate-200">Clear</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+          <div class="p-6 border-b border-slate-100">
+            <h3 class="text-2xl font-black text-slate-900">Room List</h3>
+            <p class="text-slate-500 font-bold text-sm mt-1">Current rooms configured in the admin system</p>
+          </div>
+
+          <div class="overflow-auto custom-scroll">
+            <table class="w-full min-w-[900px]">
+              <thead class="bg-slate-50">
+                <tr>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Room</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Location</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Capacity</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Status</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${state.rooms.map(room => `
+                  <tr>
+                    <td class="px-6 py-4 font-bold text-slate-900">${room.name}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${room.location}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${room.capacity}</td>
+                    <td class="px-6 py-4">
+                      <span class="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${room.status === 'Active' ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}">
+                        ${room.status}
+                      </span>
+                    </td>
+                    <td class="px-6 py-4">
+                      <div class="flex gap-2">
+                        <button onclick="startEditRoom('${room.id}')" class="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200">Edit</button>
+                        <button onclick="deleteRoom('${room.id}')" class="px-3 py-2 bg-red-50 text-red-600 rounded-xl font-bold text-xs hover:bg-red-100">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderBookingsPage() {
+      const filteredBookings = getFilteredBookings();
+      const endTimes = getAvailableEndTimes(
+        state.bookingForm.roomId,
+        state.bookingForm.date,
+        state.bookingForm.startTime,
+        state.bookingForm.id
+      );
+
+      return `
+        <section class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+          <div>
+            <h1 class="text-4xl font-black tracking-tight text-slate-900">Meetings</h1>
+            <p class="text-slate-500 font-bold text-sm mt-2">Admins can add, edit, and delete meeting bookings.</p>
+          </div>
+          <button onclick="startAddBooking()" class="bg-indigo-600 text-white px-4 py-3 rounded-2xl shadow-sm font-bold text-sm hover:bg-indigo-700">Add Meeting</button>
+        </section>
+
+        <section id="bookingFormCard" class="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-6">
+          <div class="mb-6">
+            <h3 class="text-2xl font-black text-slate-900">${state.bookingForm.id ? 'Edit Meeting' : 'Add Meeting'}</h3>
+            <p class="text-slate-500 font-bold text-sm mt-1">Simple admin booking form with conflict validation.</p>
+          </div>
+
+          <form onsubmit="saveBooking(event)" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Room</label>
+              <select onchange="updateBookingDependentField('roomId', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select room</option>
+                ${state.rooms.filter(room => room.status === 'Active').map(room => `
+                  <option value="${room.id}" ${state.bookingForm.roomId === room.id ? 'selected' : ''}>${room.name}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Date</label>
+              <input type="date" value="${escapeHtml(state.bookingForm.date)}" onchange="updateBookingDependentField('date', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Meeting Title</label>
+              <input value="${escapeHtml(state.bookingForm.purpose)}" oninput="updateBookingTextField('purpose', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="Strategy Sync" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Start Time</label>
+              <select onchange="updateBookingDependentField('startTime', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select start time</option>
+                ${HOURS.slice(0, -1).map(time => `
+                  <option value="${time}" ${state.bookingForm.startTime === time ? 'selected' : ''}>${time}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">End Time</label>
+              <select onchange="updateBookingDependentField('endTime', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">Select end time</option>
+                ${endTimes.map(time => `
+                  <option value="${time}" ${state.bookingForm.endTime === time ? 'selected' : ''}>${time}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Duration</label>
+              <input readonly value="${escapeHtml(getDuration(state.bookingForm.startTime, state.bookingForm.endTime))}" class="w-full bg-slate-100 border border-slate-100 rounded-2xl p-4 font-bold text-slate-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Organizer Name</label>
+              <input value="${escapeHtml(state.bookingForm.user)}" oninput="updateBookingTextField('user', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="John Doe" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Organizer Email</label>
+              <input type="email" value="${escapeHtml(state.bookingForm.email)}" oninput="updateBookingTextField('email', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" placeholder="john@company.com" />
+            </div>
+
+            <div class="md:col-span-2 xl:col-span-1 flex items-end gap-3">
+              <button class="bg-indigo-600 text-white px-5 py-4 rounded-2xl font-black hover:bg-indigo-700">Save Meeting</button>
+              <button type="button" onclick="resetBookingForm(); render();" class="bg-slate-100 text-slate-700 px-5 py-4 rounded-2xl font-black hover:bg-slate-200">Clear</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="bg-white rounded-[2rem] border border-slate-200 shadow-sm p-5">
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div class="md:col-span-2">
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Search</label>
+              <input value="${escapeHtml(state.filters.search)}" oninput="updateFilter('search', this.value)" placeholder="Search by title, room, organizer..." class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Room</label>
+              <select onchange="updateFilter('roomId', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500">
+                <option value="">All Rooms</option>
+                ${state.rooms.map(room => `
+                  <option value="${room.id}" ${state.filters.roomId === room.id ? 'selected' : ''}>${room.name}</option>
+                `).join('')}
+              </select>
+            </div>
+
+            <div>
+              <label class="text-[10px] font-black uppercase tracking-widest text-slate-400 block mb-2">Date</label>
+              <input type="date" value="${escapeHtml(state.filters.date)}" onchange="updateFilter('date', this.value)" class="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 font-bold outline-none focus:ring-2 focus:ring-indigo-500" />
+            </div>
+          </div>
+        </section>
+
+        <section class="bg-white rounded-[2rem] border border-slate-200 shadow-sm overflow-hidden">
+          <div class="p-6 border-b border-slate-100">
+            <h3 class="text-2xl font-black text-slate-900">All Meetings</h3>
+            <p class="text-slate-500 font-bold text-sm mt-1">Manage all meeting bookings from one place</p>
+          </div>
+
+          <div class="overflow-auto custom-scroll">
+            <table class="w-full min-w-[1200px]">
+              <thead class="bg-slate-50">
+                <tr>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Date</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Time</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Room</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Meeting Title</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Organizer</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Email</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Duration</th>
+                  <th class="text-left px-6 py-4 text-[10px] font-black uppercase tracking-widest text-slate-400">Actions</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-100">
+                ${filteredBookings.length ? filteredBookings.map(booking => `
+                  <tr>
+                    <td class="px-6 py-4 font-bold text-slate-700">${formatDisplayDate(booking.date)}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${booking.startTime} - ${booking.endTime}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${getRoomName(booking.roomId)}</td>
+                    <td class="px-6 py-4 font-bold text-slate-900">${booking.purpose}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${booking.user}</td>
+                    <td class="px-6 py-4 font-bold text-slate-500">${booking.email}</td>
+                    <td class="px-6 py-4 font-bold text-slate-700">${getDuration(booking.startTime, booking.endTime)}</td>
+                    <td class="px-6 py-4">
+                      <div class="flex gap-2">
+                        <button onclick="startEditBooking('${booking.id}')" class="px-3 py-2 bg-slate-100 text-slate-700 rounded-xl font-bold text-xs hover:bg-slate-200">Edit</button>
+                        <button onclick="deleteBooking('${booking.id}')" class="px-3 py-2 bg-red-50 text-red-600 rounded-xl font-bold text-xs hover:bg-red-100">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                `).join('') : `
+                  <tr>
+                    <td colspan="8" class="px-6 py-10 text-center text-slate-400 font-bold">No meetings found.</td>
+                  </tr>
+                `}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderModal() {
+      if (!state.modal.open) return '';
+
+      const isConfirm = state.modal.type === 'confirm';
+
+      return `
+        <div class="fixed inset-0 z-[100] bg-slate-900/60 backdrop-blur-md flex items-center justify-center p-4">
+          <div class="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-md p-8 animate-pop text-center">
+            <div class="w-16 h-16 ${isConfirm ? 'bg-red-50 text-red-600' : 'bg-indigo-50 text-indigo-600'} rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <i data-lucide="${isConfirm ? 'triangle-alert' : 'info'}"></i>
+            </div>
+
+            <h3 class="text-2xl font-black text-slate-800 mb-2">${state.modal.title}</h3>
+            <p class="text-slate-500 font-medium mb-8">${state.modal.message}</p>
+
+            <div class="flex flex-col gap-3">
+              ${isConfirm ? `
+                <button onclick="${state.modal.onConfirmAction}" class="w-full bg-red-600 text-white font-black py-4 rounded-2xl hover:bg-red-700">
+                  ${state.modal.confirmText}
+                </button>
+              ` : ''}
+
+              <button onclick="closeModal()" class="w-full ${isConfirm ? 'bg-slate-100 text-slate-700' : 'bg-slate-900 text-white'} font-bold py-4 rounded-2xl">
+                ${isConfirm ? 'Cancel' : 'OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    /* -----------------------------
+       Main render
+    ----------------------------- */
+    function render() {
+      const app = document.getElementById('app');
+
+      if (!state.session) {
+        app.innerHTML = renderLoginPage() + renderModal();
+      } else {
+        let page = '';
+
+        if (state.view === 'dashboard') page = renderDashboardPage();
+        if (state.view === 'rooms') page = renderRoomsPage();
+        if (state.view === 'bookings') page = renderBookingsPage();
+
+        app.innerHTML = renderShell(page);
+      }
+
+      lucide.createIcons();
+      updateClockText();
+    }
+
+    /* -----------------------------
+       Initialize app
+    ----------------------------- */
+    loadState();
+
+    if (!state.rooms.length) {
+      state.rooms = makeDefaultRooms();
+      saveRooms();
+    }
+
+    if (!state.bookingForm.roomId && state.rooms[0]) {
+      resetBookingForm();
+    }
+
+    render();
+    setInterval(updateClockText, 1000);
+  </script>
+</body>
+</html>
+ 

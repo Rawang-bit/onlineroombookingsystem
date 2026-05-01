@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Bookings - Smart Meeting Room Booking</title><link rel="stylesheet" href="style.css"></head>
+<body><div class="layout"><aside class="sidebar"><div class="brand">Smart Meeting Room Booking</div><nav class="nav"><a href="dashboard.html">Dashboard</a><a href="rooms.html">Rooms</a><a href="users.html">Users</a><a class="active" href="bookings.html">Bookings</a><a href="book-room.html">Book Room</a><a href="#" onclick="logout()">Logout</a></nav></aside>
+<main class="main"><div class="topbar"><div><div class="page-title">Booking Management</div><div class="subtitle">View, edit, cancel, and delete room bookings</div></div></div><div id="bookingMessage" class="notice" style="display:none;"></div>
+<section class="card"><div class="table-wrap"><table><thead><tr><th>User</th><th>Email</th><th>Room</th><th>Date</th><th>Time</th><th>Purpose</th><th>Status</th><th>Action</th></tr></thead><tbody id="bookingRows"></tbody></table></div></section></main></div>
+<script src="app.js"></script><script>
+requireAuth();
+async function renderBookings(){ const bookings=await getBookings(); document.getElementById('bookingRows').innerHTML = bookings.map(b => `<tr><td>${escapeHtml(b.user)}</td><td>${escapeHtml(b.email)}</td><td>${escapeHtml(b.roomName)}</td><td>${escapeHtml(b.date)}</td><td>${escapeHtml(b.start)} - ${escapeHtml(b.end)}</td><td>${escapeHtml(b.purpose)}</td><td>${formatStatus(b.status)}</td><td>${b.status !== 'Cancelled' ? `<button class="btn-danger" onclick="cancelBooking(${b.id})">Cancel</button>` : ''} <button class="btn-secondary" onclick="hardDelete(${b.id})">Delete</button></td></tr>`).join('') || '<tr><td colspan="8">No bookings found.</td></tr>'; }
+async function cancelBooking(id){ if(!confirm('Cancel this booking?'))return; try{ await cancelBookingApi(id); showMessage('bookingMessage','Booking cancelled successfully.'); await renderBookings(); }catch(err){ showMessage('bookingMessage',err.message,'error'); } }
+async function hardDelete(id){ if(!confirm('Delete this booking permanently?'))return; try{ await deleteBookingApi(id); showMessage('bookingMessage','Booking deleted successfully.'); await renderBookings(); }catch(err){ showMessage('bookingMessage',err.message,'error'); } }
+renderBookings().catch(err=>showMessage('bookingMessage',err.message,'error'));
+</script></body></html>

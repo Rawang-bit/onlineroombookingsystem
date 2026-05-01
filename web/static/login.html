@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin Login - Smart Meeting Room Booking</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="page-title" style="font-size: 24px;">Admin Login</div>
+      <p class="subtitle">Smart Meeting Room Booking System</p>
+      <div id="loginMessage" class="notice" style="display:none;"></div>
+      <form id="loginForm">
+        <label>Username <input type="text" id="username" placeholder="Enter admin username" required></label>
+        <label>Password <input type="password" id="password" placeholder="Enter password" required></label>
+        <button type="submit">Login</button>
+      </form>
+      <p class="footer-note">Default credentials: <strong>admin</strong> / <strong>admin123</strong></p>
+    </div>
+  </div>
+  <script src="app.js"></script>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async function(e) {
+      e.preventDefault();
+      try {
+        await loginAdmin(document.getElementById('username').value.trim(), document.getElementById('password').value.trim());
+        window.location.href = 'dashboard.html';
+      } catch (err) { showMessage('loginMessage', err.message, 'error'); }
+    });
+  </script>
+</body>
+</html>
